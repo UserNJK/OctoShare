@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure File Transfer (mTLS)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1f2937; /* Dark background */
+        }
+        /* Custom scrollbar for file list */
+        #fileList::-webkit-scrollbar {
+            width: 8px;
+        }
+        #fileList::-webkit-scrollbar-thumb {
+            background-color: #4b5563; /* Gray-600 */
+            border-radius: 4px;
+        }
+        #fileList::-webkit-scrollbar-track {
+            background-color: #374151; /* Gray-700 */
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-lg bg-gray-800 p-8 rounded-xl shadow-2xl space-y-6">
+        <header class="text-center">
+            <h1 class="text-3xl font-bold text-white mb-2">🔒 Secure File Transfer</h1>
+        </header>
+
+        <!-- Status and Messages Display -->
+        <div id="message-box" class="p-3 bg-blue-900/50 text-blue-300 text-sm rounded-lg border border-blue-700/50">
+            Awaiting file selection...
+        </div>
+
+        <!-- File Upload Section -->
+        <section class="space-y-4">
+            <h2 class="text-xl font-semibold text-white border-b border-gray-700 pb-2">Upload File</h2>
+            <form id="uploadForm" class="space-y-4">
+                <input type="file" id="secureFile" name="secureFile" required 
+                       class="w-full text-white text-sm file:mr-4 file:py-2 file:px-4 
+                              file:rounded-lg file:border-0 file:text-sm file:font-semibold
+                              file:bg-green-600 file:text-white hover:file:bg-green-700 
+                              rounded-lg p-2 border border-gray-600/50 bg-gray-700/50">
+                
+                <button type="submit" id="uploadButton" 
+                        class="w-full py-3 bg-green-600 text-white font-bold rounded-lg 
+                               hover:bg-green-700 transition duration-150 shadow-md">
+                    Upload Securely
+                </button>
+            </form>
+        </section>
+
+        <!-- File List Section (UPDATED) -->
+        <section class="space-y-4">
+            <h2 class="text-xl font-semibold text-white border-b border-gray-700 pb-2 flex justify-between items-center">
+                Uploaded Files 
+                <button type="button" id="refreshButton" class="text-sm text-indigo-400 hover:text-indigo-300 transition duration-150">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5 inline-block align-middle mr-1"><path d="M21.5 2v6h-6"/><path d="M2.5 22v-6h6"/><path d="M2.5 16a9 9 0 0 1 15.4-8.7"/><path d="M21.5 8a9 9 0 0 1-15.4 8.7"/></svg>
+                    Refresh
+                </button>
+            </h2>
+            <div id="fileList" class="max-h-60 overflow-y-auto min-h-[100px] bg-gray-700 p-3 rounded-lg border border-gray-600 space-y-2">
+                <p class="text-gray-400 text-sm">Loading files...</p>
+            </div>
+        </section>
+
+        <!-- Manual Download Section (Simplified) -->
+        <section class="space-y-4">
+            <h2 class="text-xl font-semibold text-white border-b border-gray-700 pb-2">Manual Download</h2>
+            <form id="downloadForm" class="flex flex-col space-y-4 md:flex-row md:space-x-4 md:space-y-0">
+                <input type="text" id="filenameInput" placeholder="Enter secure filename (e.g., 12345-doc.txt)" required 
+                       class="flex-grow p-3 rounded-lg bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                
+                <button type="submit" id="downloadButton"
+                        class="py-3 px-6 bg-indigo-600 text-white font-bold rounded-lg 
+                               hover:bg-indigo-700 transition duration-150 shadow-md">
+                    Download
+                </button>
+            </form>
+        </section>
+    </div>
+
+    <script>
+        const API_URL = 'https://localhost:3000';
+        const uploadForm = document.getElementById('uploadForm');
+        const downloadForm = document.getElementById('downloadForm');
+        const messageBox = document.getElementById('message-box');
+        const fileInput = document.getElementById('secureFile');
+        const filenameInput = document.getElementById('filenameInput');
+        const fileListContainer = document.getElementById('fileList');
+        const refreshButton = document.getElementById('refreshButton');
+        
+        // --- Utility Functions ---
+
+        function showMessage(message, type = 'info') {
+            let bgColor = 'bg-blue-900/50';
+            let textColor = 'text-blue-300';
+
+            if (type === 'success') {
+                bgColor = 'bg-green-900/50';
+                textColor = 'text-green-300';
+            } else if (type === 'error') {
+                bgColor = 'bg-red-900/50';
+                textColor = 'text-red-300';
+            }
+            
+            messageBox.className = `p-3 ${bgColor} ${textColor} text-sm rounded-lg border border-${type}-700/50`;
+            messageBox.innerHTML = message;
+        }
+        
+        // --- NEW: Handle Deletion ---
+        async function deleteFile(filename) {
+            if (!confirm(`Are you sure you want to delete the file: ${filename}?`)) {
+                return;
+            }
+
+            showMessage(`Attempting secure deletion of ${filename}...`, 'info');
+
+            try {
+                // DELETE request requires mTLS authentication
+                const response = await fetch(`${API_URL}/files/${filename}`, {
+                    method: 'DELETE',
+                });
+
+                if (response.ok) {
+                    showMessage(`File '${filename}' deleted successfully!`, 'success');
+                    fetchFileList(); // Refresh the list
+                } else if (response.status === 401 || response.status === 403) {
+                     showMessage('Deletion failed: Authentication denied (mTLS handshake failed).', 'error');
+                } else if (response.status === 404) {
+                     showMessage(`Deletion failed: File '${filename}' not found on server.`, 'error');
+                } else {
+                    const errorText = await response.text();
+                    showMessage(`Deletion failed (${response.status}): ${errorText.substring(0, 100)}...`, 'error');
+                }
+            } catch (error) {
+                console.error('Delete Fetch error:', error);
+                showMessage('Network Error: Could not connect to the secure server for deletion.', 'error');
+            }
+        }
+
+        // --- UPDATED: Rendering Function ---
+        function renderFileList(files) {
+            if (!files || files.length === 0) {
+                fileListContainer.innerHTML = '<p class="text-gray-400 text-sm">No files uploaded yet.</p>';
+                return;
+            }
+
+            fileListContainer.innerHTML = ''; // Clear previous list
+
+            files.forEach(filename => {
+                const item = document.createElement('div');
+                item.className = 'flex justify-between items-center p-2 bg-gray-800 rounded-md hover:bg-gray-700 transition duration-150';
+                
+                // Filename Display and Click to Auto-Fill
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'text-white text-sm break-all mr-4 cursor-pointer hover:underline';
+                nameSpan.textContent = filename;
+                nameSpan.title = 'Click to auto-fill download field';
+                nameSpan.onclick = () => {
+                    document.getElementById('filenameInput').value = filename;
+                    showMessage(`Filename ${filename} copied to manual download field.`, 'info');
+                };
+
+                // Action Buttons container
+                const actionContainer = document.createElement('div');
+                actionContainer.className = 'flex space-x-2';
+                
+                // Download Button (direct link for secure download)
+                const downloadBtn = document.createElement('a');
+                downloadBtn.href = `${API_URL}/download/${filename}`;
+                downloadBtn.className = 'py-1 px-3 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 transition duration-150 flex items-center';
+                downloadBtn.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                `;
+                downloadBtn.title = 'Download File';
+                downloadBtn.target = '_blank'; // Use target=_blank to avoid replacing the app upon download
+                
+                // Delete Button (NEW)
+                const deleteBtn = document.createElement('button');
+                deleteBtn.type = 'button';
+                deleteBtn.onclick = () => deleteFile(filename);
+                deleteBtn.className = 'py-1 px-3 bg-red-600 text-white text-xs font-semibold rounded-lg hover:bg-red-700 transition duration-150 flex items-center';
+                deleteBtn.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                `;
+                deleteBtn.title = 'Delete File';
+
+                actionContainer.appendChild(downloadBtn);
+                actionContainer.appendChild(deleteBtn);
+                
+                item.appendChild(nameSpan);
+                item.appendChild(actionContainer);
+                fileListContainer.appendChild(item);
+            });
+        }
+
+
+        // --- NEW: Fetch File List Function (No Change) ---
+        async function fetchFileList() {
+            showMessage('Fetching file list securely...', 'info');
+            fileListContainer.innerHTML = '<p class="text-gray-400 text-sm">Fetching list...</p>';
+            try {
+                // This GET request requires mTLS authentication
+                const response = await fetch(`${API_URL}/files`, {
+                    method: 'GET',
+                });
+
+                if (response.ok) {
+                    const files = await response.json();
+                    renderFileList(files);
+                    showMessage('File list updated successfully.', 'info');
+                } else if (response.status === 401 || response.status === 403) {
+                     showMessage('File list fetch failed: mTLS authentication required. Please ensure your certificate is correctly selected and valid.', 'error');
+                     fileListContainer.innerHTML = '<p class="text-red-400 text-sm">Authentication Failed (mTLS). Cannot list files.</p>';
+                } else {
+                    const errorText = await response.text();
+                    showMessage(`File list fetch failed (${response.status}): ${errorText.substring(0, 100)}...`, 'error');
+                    fileListContainer.innerHTML = '<p class="text-red-400 text-sm">Error fetching list.</p>';
+                }
+            } catch (error) {
+                console.error('List Fetch error:', error);
+                showMessage('Network Error: Could not connect to the secure server for file list. Ensure server is running.', 'error');
+                fileListContainer.innerHTML = '<p class="text-red-400 text-sm">Server connection failed.</p>';
+            }
+        }
+
+        // --- Event Handlers (No change) ---
+
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            showMessage('Attempting secure upload...');
+            
+            const file = fileInput.files[0];
+            if (!file) {
+                showMessage('Please select a file first.', 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('secureFile', file);
+
+            try {
+                const response = await fetch(`${API_URL}/upload`, {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    showMessage(`Upload successful! File saved as: <strong>${data.filename}</strong>. Client CN: ${data.clientCN}`, 'success');
+                    fetchFileList(); // Refresh list on successful upload
+                } else if (response.status === 401 || response.status === 403) {
+                    showMessage('Upload failed: Authentication denied (mTLS handshake failed). Please ensure your client certificate is imported correctly.', 'error');
+                } else {
+                    const errorText = await response.text();
+                    showMessage(`Upload failed (${response.status}): ${errorText.substring(0, 100)}...`, 'error');
+                }
+            } catch (error) {
+                console.error('Fetch error:', error);
+                showMessage('Network Error: Could not reach the secure server. Ensure the server is running and your mTLS certificate is working.', 'error');
+            }
+        });
+
+        downloadForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const filename = filenameInput.value.trim();
+            
+            if (!filename) {
+                showMessage('Please enter a filename to download.', 'error');
+                return;
+            }
+            
+            const downloadUrl = `${API_URL}/download/${filename}`;
+            showMessage(`Attempting secure download of ${filename}... Opening new tab.`);
+
+            // Redirect the browser to the secure URL to trigger the download
+            window.open(downloadUrl, '_blank');
+        });
+
+        // --- Initialization ---
+        refreshButton.addEventListener('click', fetchFileList);
+        
+        // Fetch files when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+             // We only call fetchFileList() if we have established a secure connection first.
+             // Since the root check already confirmed mTLS works, we proceed.
+             fetchFileList(); 
+        });
+
+    </script>
+</body>
+</html>
